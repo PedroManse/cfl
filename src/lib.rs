@@ -15,6 +15,7 @@ pub struct Chunk {
     pub content: Vec<u8>,
 }
 
+#[repr(u8)]
 #[derive(Debug)]
 pub enum Tag {
     EOF = 0,
