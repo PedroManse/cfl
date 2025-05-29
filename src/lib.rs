@@ -9,8 +9,8 @@ pub struct ChunkSize(pub u16);
 
 #[derive(Debug)]
 pub struct Chunk {
-    pub tag: Tag,
     pub id: ChunkId,
+    pub tag: Tag,
     pub size: ChunkSize,
     pub content: Vec<u8>,
 }
