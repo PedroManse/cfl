@@ -1,4 +1,5 @@
 pub mod reader;
+pub mod parser;
 use std::fmt::Display;
 
 // TODO should be enum of Invalid | NonZero<u16>
@@ -59,16 +60,24 @@ pub enum TagSizeError {
     EOFWithSize(ChunkSize),
 }
 
-
 #[derive(thiserror::Error, Debug)]
 pub enum ErrorKind {
     #[error(transparent)]
     InvalidChunk(#[from] reader::ReaderError),
+}
 
+pub trait IntoError {
+    fn into_error(self, extra: ChunkId) -> Error;
+}
+
+impl<E: Into<ErrorKind>> IntoError for E {
+    fn into_error(self, chunk_id: ChunkId) -> Error {
+        Into::<ErrorKind>::into(self).into_error(chunk_id)
+    }
 }
 
 impl ErrorKind {
-    pub fn into_error(self, chunk_id: ChunkId) -> Error {
+    fn into_error(self, chunk_id: ChunkId) -> Error {
         Error {
             kind: self,
             chunk_id,
@@ -106,7 +115,7 @@ impl Display for ChunkSize {
 
 impl Display for ChunkId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match  self.0 {
+        match self.0 {
             0 => write!(f, "#InvalidId"),
             n => write!(f, "#{n}"),
         }
