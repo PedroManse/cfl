@@ -1,4 +1,5 @@
 pub mod raw;
+pub mod graph;
 use std::fmt::Display;
 
 use self::raw::Chunk;

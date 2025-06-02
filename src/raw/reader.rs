@@ -39,20 +39,21 @@ impl ChunkReader {
         })
     }
 
+    fn wrap_err<T>(m: Option<T>, e: ReaderError, id: ChunkId) -> Result<T, Error> {
+        m.ok_or(e)
+            .map_err(ErrorKind::from)
+            .map_err(|e| e.into_error(id))
+    }
+
     pub fn get_chunk<I: Iterator<Item = u8>>(&mut self, itr: &mut I) -> Result<Chunk, Error> {
         use ReaderError::*;
         let id = read_u16(itr)
             .ok_or(MissingId)
             .map_err(ErrorKind::from)
-            .map_err(|e| e.into_error(ChunkId(0)))
+            .map_err(|e| e.into_error(ChunkId(u16::MAX)))
             .map(ChunkId)?;
-        let make_err = |m: Option<u16>, e| {
-            m.ok_or(e)
-                .map_err(ErrorKind::from)
-                .map_err(|e| e.into_error(id))
-        };
-        let tag = make_err(read_u16(itr), MissingTag)?;
-        let size = make_err(read_u16(itr), MissingSize).map(ChunkSize)?;
+        let tag = ChunkReader::wrap_err(itr.next(), MissingTag, id)?;
+        let size = ChunkSize(ChunkReader::wrap_err(read_u16(itr), MissingTag, id)?);
         let content = get_n_u8s(itr, size.0)
             .ok_or(MissingContent)
             .map_err(ErrorKind::from)
@@ -82,12 +83,11 @@ fn read_u16<I: Iterator<Item = u8>>(itr: &mut I) -> Option<u16> {
     Some(merge_2be_u8s(itr.next()?, itr.next()?))
 }
 
-impl TryFrom<u16> for Tag {
+impl TryFrom<u8> for Tag {
     type Error = ReaderError;
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
         use Tag::*;
         Ok(match value {
-            0 => EOF,
             1 => Int,
             2 => Uint,
             3 => String,
@@ -109,7 +109,7 @@ pub enum ReaderError {
     #[error("Missing Content")]
     MissingContent,
     #[error("Invalid tag value: {0}")]
-    InvalidTagValue(u16),
+    InvalidTagValue(u8),
     #[error("Advertised and actual size don't match")]
     UnmatchedContentLen {
         said_size: ChunkSize,

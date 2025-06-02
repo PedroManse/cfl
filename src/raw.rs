@@ -11,7 +11,6 @@ pub struct Chunk {
 
 #[derive(Debug)]
 pub enum Tag {
-    EOF = 0,
     Int = 1,
     Uint = 2,
     String = 3,
@@ -33,8 +32,6 @@ impl Tag {
             (Array, _) => Some(TSE::ArrayWithOddCount(size)),
             (Map, count) if (count & 0b11) == 0 => None,
             (Map, _) => Some(TSE::MapWithNonQuadCount(size)),
-            (EOF, 0) => None,
-            (EOF, _) => Some(TSE::EOFWithSize(size)),
         }
     }
 }
@@ -49,7 +46,5 @@ pub enum TagSizeError {
     ArrayWithOddCount(ChunkSize),
     #[error("Map chunk size must be divisible by four, got {0}")]
     MapWithNonQuadCount(ChunkSize),
-    #[error("EOF tag must have size of 0, got {0}")]
-    EOFWithSize(ChunkSize),
 }
 
