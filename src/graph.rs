@@ -47,8 +47,11 @@ pub struct PieceManager {
 impl PieceManager {
     //TODO get chunks
     pub fn new(chunks: Vec<Chunk>) -> Self {
-        let chunks = chunks.into_iter().map(|c| (c.id.clone(), c)).collect();
+        let chunks = chunks.into_iter().map(|c| (c.id, c)).collect();
         Self { chunks }
+    }
+    pub fn eval_first(&mut self) -> Result<Piece, ParseContentError> {
+        self.eval_chunk_id(ChunkId(1))
     }
     pub fn eval_chunk_id(&mut self, chunk_id: ChunkId) -> Result<Piece, ParseContentError> {
         let x = self.chunks.remove(&chunk_id).ok_or(ParseContentError::ChunkNotFound(chunk_id))?;
@@ -73,7 +76,7 @@ impl PieceManager {
                 let v: Vec<ChunkId> = content.chunks_exact(2).map(|v|{
                     let h = v[0];
                     let l = v[1];
-                    (h as u16) << 8 + (l as u16)
+                    ((h as u16) << 8) + (l as u16)
                 }).map(ChunkId).collect();
                 PieceContent::PArray(v)
             }
@@ -83,8 +86,8 @@ impl PieceManager {
                     let lk = v[1];
                     let hv = v[2];
                     let lv = v[3];
-                    let k = ChunkId((hk as u16) << 8 + (lk as u16));
-                    let v = ChunkId((hv as u16) << 8 + (lv as u16));
+                    let k = ChunkId(((hk as u16) << 8) + (lk as u16));
+                    let v = ChunkId(((hv as u16) << 8) + (lv as u16));
                     let k = self.eval_chunk_id(k)?.into_key()?;
                     Ok((k, v))
                 }).collect();
@@ -103,7 +106,7 @@ fn make_int(content: &[u8]) -> i64 {
 }
 
 fn make_uint(content: &[u8]) -> u64 {
-    content.iter().fold(0, |s, n| s<<8+n)
+    content.iter().fold(0, |s, n| (s<<8)+(*n as u64))
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -9,7 +9,7 @@ fn exec() -> Result<(), Error> {
     let reader = ChunkReader::new(cont).into_iter();
     let ch: Vec<_> = reader.collect::<Result<_, _>>()?;
     let mut graph_rez = PieceManager::new(ch);
-    let x = graph_rez.eval_chunk_id(cfl::ChunkId(1));
+    let x = graph_rez.eval_first();
     println!("{x:?}");
     Ok(())
 }
