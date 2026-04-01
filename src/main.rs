@@ -1,16 +1,26 @@
-use cfl::{
-    Tag, Error,
-    graph::PieceManager,
-    reader::ChunkReader,
-};
+use std::num::NonZero;
+
+use cfl::graph::ChunkGraphReadType;
+use cfl::{Error, graph::PieceManager};
 
 fn exec() -> Result<(), Error> {
-    let cont = vec![0, 1, Tag::String as u8, 0, 4, 104, 105, 33, 10];
-    let reader = ChunkReader::new(cont).into_iter();
-    let ch: Vec<_> = reader.collect::<Result<_, _>>()?;
-    let mut graph_rez = PieceManager::new(ch);
-    let x = graph_rez.eval_first();
-    println!("{x:?}");
+    let ch = vec![cfl::Chunk {
+        id: cfl::ChunkId(NonZero::<u16>::new(1).unwrap()),
+        tag: cfl::Tag::String,
+        size: cfl::ChunkSize(5),
+        content: "hello".as_bytes().to_vec(),
+    }];
+    println!("chunks: {ch:?}");
+    let graph_rez = PieceManager::new(ch);
+    let x = cfl::graph::Eval::read_first(&graph_rez);
+    println!("graph: {x:?}");
+
+    let mut out = Vec::with_capacity(graph_rez.count_bytes());
+    cfl::writer::ChunkWriter(&mut out)
+        .write_chunks(&graph_rez.into_chunks())
+        .unwrap();
+    println!("byte out:{out:?}");
+
     Ok(())
 }
 

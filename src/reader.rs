@@ -1,30 +1,30 @@
 use super::*;
 use std::collections::HashSet;
 
-pub struct ChunkReader {
-    reader: ByteReader,
+pub struct ChunkReader<'b> {
+    reader: ByteReader<'b>,
     ids_read: HashSet<ChunkId>,
 }
 
-pub struct ChunkIter ( ChunkReader );
+pub struct ChunkIter<'b>(ChunkReader<'b>);
 
-impl Iterator for ChunkIter {
+impl<'b> Iterator for ChunkIter<'b> {
     type Item = Result<Chunk, Error>;
     fn next(&mut self) -> Option<Self::Item> {
         self.0.get_next_chunk()
     }
 }
 
-impl IntoIterator for ChunkReader {
+impl<'b> IntoIterator for ChunkReader<'b> {
     type Item = Result<Chunk, Error>;
-    type IntoIter = ChunkIter;
+    type IntoIter = ChunkIter<'b>;
     fn into_iter(self) -> Self::IntoIter {
         ChunkIter(self)
     }
 }
 
-impl ChunkReader {
-    pub fn new(content: Vec<u8>) -> Self {
+impl<'b> ChunkReader<'b> {
+    pub fn new(content: &'b [u8]) -> Self {
         Self {
             reader: ByteReader::new(content),
             ids_read: HashSet::new(),
@@ -43,15 +43,16 @@ impl ChunkReader {
         let id = self
             .reader
             .u16_chunked_err(ReaderError::EOF, ReaderError::MissingId)
-            .map(ChunkId)
-            .map_err(|e| e.into_error(ChunkId(0)))?;
-        let ChunkInfo { tag, size, content } =
-            self.get_chunk_info().map_err(|e| e.into_error(id))?;
-        self.read(tag, id, size, content)
-            .map_err(|e| e.into_error(id))
+            .and_then(ChunkId::try_from)
+            .map_err(|e| e.with_byte(self.reader.counter))?;
+        let ChunkInfo { tag, size, content } = self
+            .get_chunk_info()
+            .map_err(|e| e.into_error(id, self.reader.counter))?;
+        self.parse(tag, id, size, content)
+            .map_err(|e| e.into_error(id, self.reader.counter))
     }
 
-    fn read(
+    fn parse(
         &mut self,
         tag: Tag,
         id: ChunkId,
@@ -68,7 +69,7 @@ impl ChunkReader {
             return Err(ReaderError::IdColision { id });
         }
         if let Some(kind) = tag.check_valid_size(size) {
-            return Err(ReaderError::InvalidSizeForTag(kind));
+            return Err(kind);
         }
 
         Ok(Chunk {
@@ -104,13 +105,13 @@ struct ChunkInfo {
     content: Vec<u8>,
 }
 
-struct ByteReader {
-    bytes: Vec<u8>,
+struct ByteReader<'b> {
+    bytes: &'b [u8],
     counter: usize,
 }
 
-impl ByteReader {
-    fn new(bytes: Vec<u8>) -> Self {
+impl<'b> ByteReader<'b> {
+    fn new(bytes: &'b [u8]) -> ByteReader<'b> {
         Self { bytes, counter: 0 }
     }
 
@@ -184,6 +185,52 @@ pub enum ReaderError {
     },
     #[error("Chunk's id colision: {id} already taken")]
     IdColision { id: ChunkId },
-    #[error(transparent)]
-    InvalidSizeForTag(TagSizeError),
+    #[error("Int chunk's size must be a power of two, got {0}")]
+    IntMustBePowerOfTwo(ChunkSize),
+    #[error("Uint chunk's size must be a power of two, got {0}")]
+    UintMustBePowerOfTwo(ChunkSize),
+    #[error("Array chunk size must be an even value, got {0}")]
+    ArrayWithOddCount(ChunkSize),
+    #[error("Map chunk size must be divisible by four, got {0}")]
+    MapWithNonQuadCount(ChunkSize),
+    #[error("Chunk's id is 0")]
+    InvalidChunk,
+}
+
+impl ReaderError {
+    fn with_byte(self, byte: usize) -> Error {
+        Error {
+            kind: self.into(),
+            chunk_id: None,
+            byte,
+        }
+    }
+    fn into_error(self, chunk_id: ChunkId, byte: usize) -> Error {
+        Error {
+            kind: self,
+            chunk_id: Some(chunk_id),
+            byte,
+        }
+    }
+}
+
+impl ChunkId {
+    pub const fn try_from_u16(v: u16) -> Result<Self, ReaderError> {
+        match NonZeroU16::new(v) {
+            Some(v) => Ok(ChunkId(v)),
+            None => Err(ReaderError::InvalidChunk),
+        }
+    }
+    pub const unsafe fn from_u16_unchecked(v: u16) -> ChunkId {
+        ChunkId(unsafe { NonZeroU16::new_unchecked(v) })
+    }
+}
+
+impl TryFrom<u16> for ChunkId {
+    type Error = reader::ReaderError;
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        NonZeroU16::new(value)
+            .map(ChunkId)
+            .ok_or(ReaderError::InvalidChunk)
+    }
 }

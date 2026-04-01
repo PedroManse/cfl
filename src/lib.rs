@@ -1,14 +1,19 @@
 pub mod graph;
 pub mod reader;
+pub mod writer;
 use std::fmt::Display;
+use std::num::NonZeroU16;
 
 // TODO should be enum of Invalid | NonZero<u16>
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub struct ChunkId(pub u16);
+pub struct ChunkId(pub NonZeroU16);
+
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkSize(pub u16);
 
-#[derive(Debug)]
+/// Chunk:
+/// [ u16 Id | u8 Tag | u16 size | Content ]
+#[derive(Debug, Clone)]
 pub struct Chunk {
     pub id: ChunkId,
     pub tag: Tag,
@@ -17,7 +22,7 @@ pub struct Chunk {
 }
 
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Tag {
     Int = 1,
     Uint = 2,
@@ -27,9 +32,9 @@ pub enum Tag {
 }
 
 impl Tag {
-    pub fn check_valid_size(&self, size: ChunkSize) -> Option<TagSizeError> {
+    pub fn check_valid_size(&self, size: ChunkSize) -> Option<reader::ReaderError> {
         use Tag::*;
-        use TagSizeError as TSE;
+        use reader::ReaderError as TSE;
         match (self, size.0) {
             (Int, n) if n.count_ones() == 1 => None,
             (Int, _) => Some(TSE::IntMustBePowerOfTwo(size)),
@@ -45,47 +50,10 @@ impl Tag {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum TagSizeError {
-    #[error("Int chunk's size must be a power of two, got {0}")]
-    IntMustBePowerOfTwo(ChunkSize),
-    #[error("Uint chunk's size must be a power of two, got {0}")]
-    UintMustBePowerOfTwo(ChunkSize),
-    #[error("Array chunk size must be an even value, got {0}")]
-    ArrayWithOddCount(ChunkSize),
-    #[error("Map chunk size must be divisible by four, got {0}")]
-    MapWithNonQuadCount(ChunkSize),
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum ErrorKind {
-    #[error(transparent)]
-    InvalidChunk(#[from] reader::ReaderError),
-}
-
-pub trait IntoError {
-    fn into_error(self, extra: ChunkId) -> Error;
-}
-
-impl<E: Into<ErrorKind>> IntoError for E {
-    fn into_error(self, chunk_id: ChunkId) -> Error {
-        Into::<ErrorKind>::into(self).into_error(chunk_id)
-    }
-}
-
-impl ErrorKind {
-    fn into_error(self, chunk_id: ChunkId) -> Error {
-        Error {
-            kind: self,
-            chunk_id,
-        }
-    }
-}
-
-//TODO add where the error happened (what byte)
-#[derive(thiserror::Error, Debug)]
 pub struct Error {
-    kind: ErrorKind,
-    chunk_id: ChunkId,
+    kind: reader::ReaderError,
+    chunk_id: Option<ChunkId>,
+    byte: usize,
 }
 
 // {tag}#{id}[{content}]
@@ -98,7 +66,11 @@ impl Display for Chunk {
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Chunk {} | ", self.chunk_id.0)?;
+        if let Some(ch_id) = self.chunk_id {
+            write!(f, "Chunk {} | ", ch_id)?;
+        } else {
+            write!(f, "Byte @{} |", self.byte)?;
+        }
         write!(f, "{}", self.kind)
     }
 }
@@ -111,9 +83,6 @@ impl Display for ChunkSize {
 
 impl Display for ChunkId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            0 => write!(f, "#InvalidId"),
-            n => write!(f, "#{n}"),
-        }
+        write!(f, "#{self}")
     }
 }

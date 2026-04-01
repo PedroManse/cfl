@@ -1,8 +1,7 @@
+use super::*;
+use crate::ChunkId;
 use std::collections::HashMap;
 use std::string::FromUtf8Error;
-use crate::ChunkId;
-use super::*;
-
 
 #[derive(Debug)]
 pub struct Piece {
@@ -23,11 +22,21 @@ pub enum PieceContent {
 impl Piece {
     fn into_key(self) -> Result<PieceKey, ParseContentError> {
         Ok(match self.content {
-            PieceContent::PStr(s)=>PieceKey::PStr(s),
-            PieceContent::PInt(s)=>PieceKey::PInt(s),
-            PieceContent::PUint(s)=>PieceKey::PUint(s),
-            PieceContent::PMap(_) => return Err(ParseContentError::PieceCantBeKey { id: self.id, tag: self.tag }),
-            PieceContent::PArray(_) => return Err(ParseContentError::PieceCantBeKey { id: self.id, tag: self.tag }),
+            PieceContent::PStr(s) => PieceKey::PStr(s),
+            PieceContent::PInt(s) => PieceKey::PInt(s),
+            PieceContent::PUint(s) => PieceKey::PUint(s),
+            PieceContent::PMap(_) => {
+                return Err(ParseContentError::PieceCantBeKey {
+                    id: self.id,
+                    tag: self.tag,
+                });
+            }
+            PieceContent::PArray(_) => {
+                return Err(ParseContentError::PieceCantBeKey {
+                    id: self.id,
+                    tag: self.tag,
+                });
+            }
         })
     }
 }
@@ -44,78 +53,155 @@ pub struct PieceManager {
     chunks: HashMap<ChunkId, Chunk>,
 }
 
+pub struct Consume;
+pub struct Eval;
+
+pub trait ChunkGraphReadType<PM> {
+    fn read_first(pm: PM) -> Result<Piece, ParseContentError> {
+        // SAFETY: [NonZeroU16::new_unchecked] is safe in const contexts, therefore
+        // [ChunkId::from_u16_unchecked] is too.
+        const FIRST_CHUNK_ID: ChunkId = unsafe { ChunkId::from_u16_unchecked(1) };
+        Self::read_chunk_id(pm, FIRST_CHUNK_ID)
+    }
+    fn read_chunk_and_id(pm: PM, chunk_id: u16) -> Result<Piece, ParseContentError> {
+        let id = ChunkId::try_from(chunk_id)?;
+        Self::read_chunk_id(pm, id)
+    }
+    fn read_chunk_id(pm: PM, chunk_id: ChunkId) -> Result<Piece, ParseContentError>;
+}
+
+trait ChunkGraphResolver<PM>: ChunkGraphReadType<PM> {
+    fn _read_chunk(
+        pm: PM,
+        Chunk {
+            id, tag, content, ..
+        }: Chunk,
+    ) -> Result<Piece, ParseContentError> {
+        let pcontent = match tag {
+            Tag::Int => {
+                let v = content.iter().fold(0, |s, n| {
+                    println!("{} + {n}", s << 8);
+                    (s << 8) + (*n as i64)
+                });
+                PieceContent::PInt(v)
+            }
+            Tag::Uint => {
+                let v = content.iter().fold(0, |s, n| (s << 8) + (*n as u64));
+                PieceContent::PUint(v)
+            }
+            Tag::String => {
+                let v = String::try_from(content.to_owned())?;
+                PieceContent::PStr(v)
+            }
+            Tag::Array => {
+                let v = content
+                    .as_chunks()
+                    .0
+                    .iter()
+                    .map(|&[h, l]| ((h as u16) << 8) + (l as u16))
+                    .map(|i| ChunkId::try_from(i))
+                    .collect::<Result<_, _>>()?;
+                PieceContent::PArray(v)
+            }
+            Tag::Map => Self::_read_map_chunk(pm, content)?,
+        };
+        Ok(Piece {
+            id,
+            tag,
+            content: pcontent,
+        })
+    }
+    fn _read_map_chunk(pm: PM, content: Vec<u8>) -> Result<PieceContent, ParseContentError>;
+}
+
+impl ChunkGraphResolver<&mut PieceManager> for Consume {
+    fn _read_map_chunk(
+        pm: &mut PieceManager,
+        content: Vec<u8>,
+    ) -> Result<PieceContent, ParseContentError> {
+        let v: Result<Vec<(PieceKey, ChunkId)>, ParseContentError> = content
+            .as_chunks()
+            .0
+            .iter()
+            .map(|&[hk, lk, hv, lv]| {
+                let k = ChunkId::try_from(((hk as u16) << 8) + (lk as u16))?;
+                let v = ChunkId::try_from(((hv as u16) << 8) + (lv as u16))?;
+                let k = Self::read_chunk_id(pm, k)?.into_key()?;
+                Ok((k, v))
+            })
+            .collect();
+        v.map(PieceContent::PMap)
+    }
+}
+
+impl ChunkGraphReadType<&mut PieceManager> for Consume {
+    fn read_chunk_id(pm: &mut PieceManager, chunk_id: ChunkId) -> Result<Piece, ParseContentError> {
+        let x = pm
+            .chunks
+            .remove(&chunk_id)
+            .ok_or(ParseContentError::ChunkNotFound(chunk_id))?;
+        Self::_read_chunk(pm, x)
+    }
+}
+
+impl ChunkGraphResolver<&PieceManager> for Eval {
+    fn _read_map_chunk(
+        pm: &PieceManager,
+        content: Vec<u8>,
+    ) -> Result<PieceContent, ParseContentError> {
+        let v: Result<Vec<(PieceKey, ChunkId)>, ParseContentError> = content
+            .as_chunks()
+            .0
+            .iter()
+            .map(|&[hk, lk, hv, lv]| {
+                let k = ChunkId::try_from(((hk as u16) << 8) + (lk as u16))?;
+                let v = ChunkId::try_from(((hv as u16) << 8) + (lv as u16))?;
+                let k = Self::read_chunk_id(pm, k)?.into_key()?;
+                Ok((k, v))
+            })
+            .collect();
+        v.map(PieceContent::PMap)
+    }
+}
+
+impl ChunkGraphReadType<&PieceManager> for Eval {
+    fn read_chunk_id(pm: &PieceManager, chunk_id: ChunkId) -> Result<Piece, ParseContentError> {
+        let x = pm
+            .chunks
+            .get(&chunk_id)
+            .cloned()
+            .ok_or(ParseContentError::ChunkNotFound(chunk_id))?;
+        Self::_read_chunk(pm, x)
+    }
+}
+
 impl PieceManager {
-    //TODO get chunks
     pub fn new(chunks: Vec<Chunk>) -> Self {
         let chunks = chunks.into_iter().map(|c| (c.id, c)).collect();
         Self { chunks }
     }
-    pub fn eval_first(&mut self) -> Result<Piece, ParseContentError> {
-        self.eval_chunk_id(ChunkId(1))
+    pub fn count_bytes(&self) -> usize {
+        self.chunks
+            .iter()
+            .map(|(_, c)| 5 + usize::from(c.size.0))
+            .sum()
     }
-    pub fn eval_chunk_id(&mut self, chunk_id: ChunkId) -> Result<Piece, ParseContentError> {
-        let x = self.chunks.remove(&chunk_id).ok_or(ParseContentError::ChunkNotFound(chunk_id))?;
-        self.eval_chunk(x)
+    pub fn into_chunks(self) -> Vec<Chunk> {
+        self.chunks.into_values().collect()
     }
-    pub fn eval_chunk(&mut self, Chunk { tag, id, content, size: _ }: Chunk) -> Result<Piece, ParseContentError> {
-        let pcontent = match tag {
-            Tag::Int => {
-                let v = make_int(&content);
-                PieceContent::PInt(v)
-            }
-            Tag::Uint => {
-                let v = make_uint(&content);
-                PieceContent::PUint(v)
-            }
-            Tag::String => {
-                let v = String::try_from(content)?;
-                PieceContent::PStr(v)
-            }
-            Tag::Array => {
-                // TODO use .array_chunks when stable
-                let v: Vec<ChunkId> = content.chunks_exact(2).map(|v|{
-                    let h = v[0];
-                    let l = v[1];
-                    ((h as u16) << 8) + (l as u16)
-                }).map(ChunkId).collect();
-                PieceContent::PArray(v)
-            }
-            Tag::Map => {
-                let v: Result<Vec<(PieceKey, ChunkId)>, ParseContentError> = content.chunks_exact(4).map(|v|{
-                    let hk = v[0];
-                    let lk = v[1];
-                    let hv = v[2];
-                    let lv = v[3];
-                    let k = ChunkId(((hk as u16) << 8) + (lk as u16));
-                    let v = ChunkId(((hv as u16) << 8) + (lv as u16));
-                    let k = self.eval_chunk_id(k)?.into_key()?;
-                    Ok((k, v))
-                }).collect();
-                PieceContent::PMap(v?)
-            }
-        };
-        Ok(Piece { id, tag, content: pcontent })
+    pub fn into_inner(self) -> HashMap<ChunkId, Chunk> {
+        self.chunks
     }
-}
-
-fn make_int(content: &[u8]) -> i64 {
-    content.iter().fold(0, |s, n| {
-        println!("{} + {n}", s<<8);
-        (s<<8)+(*n as i64)
-    })
-}
-
-fn make_uint(content: &[u8]) -> u64 {
-    content.iter().fold(0, |s, n| (s<<8)+(*n as u64))
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum ParseContentError {
     #[error(transparent)]
+    ReaderError(#[from] reader::ReaderError),
+    #[error(transparent)]
     StringParse(#[from] FromUtf8Error),
     #[error("Chunk {0} not found")]
     ChunkNotFound(ChunkId),
     #[error("Chunk {id} can't be used as map key | It's a {tag:?}")]
-    PieceCantBeKey{id: ChunkId, tag: Tag},
+    PieceCantBeKey { id: ChunkId, tag: Tag },
 }
-
